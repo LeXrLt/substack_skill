@@ -1,6 +1,12 @@
 # Virtual environment
 .venv/
 
+# Environment variables
+.env
+
+# Documents
+documents/
+
 # Python
 __pycache__/
 *.py[cod]
