@@ -14,10 +14,15 @@ Steps:
 """
 
 import os
+import re
 import time
 import json
+import argparse
+import hashlib
 from datetime import datetime
+from urllib.parse import urlparse
 
+import requests
 import psycopg2
 from dotenv import load_dotenv
 from financial_hub_postgres import FinancialHubClient
@@ -68,9 +73,62 @@ def ensure_author(conn, username: str, user_id: str):
     conn.commit()
 
 
-def save_item_to_db(conn, username: str, item: dict) -> bool:
+def download_attachments(attachments: list, file_path: str, username: str) -> list:
+    """
+    Download attachment files to file_path directory.
+    Returns updated attachments list with local_path added.
+    """
+    if not attachments or not file_path:
+        return attachments
+
+    # Create download directory: file_path/username/attachments/
+    download_dir = os.path.join(file_path, username, "attachments")
+    os.makedirs(download_dir, exist_ok=True)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+
+    updated = []
+    for att in attachments:
+        att_copy = dict(att)
+        att_type = att.get("type", "unknown")
+
+        # Get the URL to download
+        url = None
+        if att_type == "image":
+            url = att.get("imageUrl", "")
+        elif "url" in att:
+            url = att["url"]
+
+        if url:
+            try:
+                # Generate filename from URL hash + extension
+                parsed = urlparse(url)
+                ext = os.path.splitext(parsed.path)[1] or ".jpg"
+                url_hash = hashlib.md5(url.encode()).hexdigest()[:12]
+                filename = f"{url_hash}{ext}"
+                local_file = os.path.join(download_dir, filename)
+
+                # Download if not already exists
+                if not os.path.exists(local_file):
+                    resp = requests.get(url, headers=headers, timeout=30)
+                    resp.raise_for_status()
+                    with open(local_file, "wb") as f:
+                        f.write(resp.content)
+
+                att_copy["local_path"] = os.path.abspath(local_file)
+            except Exception as e:
+                att_copy["download_error"] = str(e)
+
+        updated.append(att_copy)
+    return updated
+
+
+def save_item_to_db(conn, username: str, item: dict, file_path: str = None) -> bool:
     """
     Save a single feed item to the substack_items table.
+    Downloads attachments to file_path if provided.
     Returns True if a new row was inserted, False if it already existed.
     """
     item_type = item.get("type", "unknown")
@@ -105,6 +163,13 @@ def save_item_to_db(conn, username: str, item: dict) -> bool:
                 pass
 
         attachments = []
+
+        # Extract image attachments from body_html
+        if body_html:
+            img_urls = re.findall(r'<img[^>]+src="([^"]+)"', body_html)
+            for img_url in img_urls:
+                if "substack" in img_url or "substackcdn" in img_url:
+                    attachments.append({"type": "image", "imageUrl": img_url})
 
     elif item_type == "comment":
         comment = item.get("comment") or {}
@@ -146,6 +211,10 @@ def save_item_to_db(conn, username: str, item: dict) -> bool:
     if item_type == "post":
         related_post_title = None
 
+    # Download attachments if file_path is provided
+    if file_path and attachments:
+        attachments = download_attachments(attachments, file_path, username)
+
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -184,7 +253,7 @@ def save_item_to_db(conn, username: str, item: dict) -> bool:
     return inserted
 
 
-def crawl_target(conn, client: FinancialHubClient, target, max_items: int = 50):
+def crawl_target(conn, client: FinancialHubClient, target, max_items: int = 50, file_path: str = None):
     """Execute one full crawl cycle for a single Substack target."""
     print(f"\n{'─' * 50}")
     print(f"Target: [{target.id}] {target.target_name} ({target.target_identifier})")
@@ -221,7 +290,7 @@ def crawl_target(conn, client: FinancialHubClient, target, max_items: int = 50):
         items_failed = 0
         for i, item in enumerate(items, 1):
             try:
-                inserted = save_item_to_db(conn, username, item)
+                inserted = save_item_to_db(conn, username, item, file_path=file_path)
                 if inserted:
                     items_new += 1
                     item_type = item.get("type", "unknown")
@@ -262,6 +331,30 @@ def crawl_target(conn, client: FinancialHubClient, target, max_items: int = 50):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Substack crawler - fetch and store content.")
+    parser.add_argument(
+        "-n", "--max-items",
+        type=int,
+        default=50,
+        help="Maximum number of items to fetch per target (default: 50, 0 for unlimited)"
+    )
+    parser.add_argument(
+        "-f", "--file-path",
+        type=str,
+        default=None,
+        help="Directory path to download attachments (images, etc.)"
+    )
+    args = parser.parse_args()
+
+    max_items = args.max_items
+    file_path = args.file_path
+
+    # Resolve file_path to absolute
+    if file_path:
+        file_path = os.path.abspath(file_path)
+        os.makedirs(file_path, exist_ok=True)
+        print(f"Attachments will be saved to: {file_path}")
+
     conn = get_db_connection()
     try:
         # Initialize schema
@@ -282,7 +375,7 @@ def main():
 
         # ── Crawl each target ──
         for target in targets:
-            crawl_target(conn, client, target)
+            crawl_target(conn, client, target, max_items=max_items, file_path=file_path)
 
         # ── Final state ──
         print(f"\n{'=' * 50}")
