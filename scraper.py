@@ -226,9 +226,44 @@ def save_comment_item(item: dict, username: str, output_dir: str) -> str:
     return file_path
 
 
+def fetch_post_full_content(url: str) -> dict:
+    """
+    Fetch the full post content by visiting the article page.
+    Extracts body_html and metadata from window._preloads.
+    
+    Returns a dict with keys: body_html, title, subtitle, post_date, canonical_url, etc.
+    Returns empty dict on failure.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"    Warning: Failed to fetch {url}: {e}")
+        return {}
+    
+    match = re.search(r"window\._preloads\s*=\s*JSON\.parse\(\"(.*?)\"\)", response.text)
+    if not match:
+        print(f"    Warning: Could not find _preloads in {url}")
+        return {}
+    
+    try:
+        json_str = match.group(1).encode().decode("unicode_escape")
+        data = json.loads(json_str)
+    except Exception as e:
+        print(f"    Warning: Failed to parse _preloads from {url}: {e}")
+        return {}
+    
+    return data.get("post", {}) or {}
+
+
 def save_post_item(item: dict, username: str, output_dir: str) -> str:
     """
-    Save a post item as a txt file (metadata only for now, full content TBD).
+    Save a post item as a txt file with full article content.
+    Fetches the full body from the post's canonical URL.
     Returns the saved file path, or empty string if skipped.
     """
     post = item.get("post") or {}
@@ -237,7 +272,6 @@ def save_post_item(item: dict, username: str, output_dir: str) -> str:
     subtitle = post.get("subtitle", "")
     slug = post.get("slug", "")
     canonical_url = post.get("canonical_url", "")
-    truncated_body = post.get("truncated_body_text", "")
     
     # Parse post_date
     item_dt = parse_item_date(post_date_str)
@@ -254,20 +288,43 @@ def save_post_item(item: dict, username: str, output_dir: str) -> str:
     os.makedirs(dir_path, exist_ok=True)
     file_path = os.path.join(dir_path, filename)
     
-    # Build file content (metadata + preview only, full content TBD)
+    # Fetch full post content from canonical URL
+    body_text = ""
+    if canonical_url:
+        print(f"    Fetching full content: {canonical_url}")
+        full_post = fetch_post_full_content(canonical_url)
+        if full_post:
+            body_html = full_post.get("body_html", "")
+            if body_html:
+                body_text = html_to_text(body_html)
+            # Use richer metadata from full fetch if available
+            if not subtitle:
+                subtitle = full_post.get("subtitle", "")
+    
+    if not body_text:
+        # Fallback to truncated body from feed
+        truncated_body = post.get("truncated_body_text", "")
+        body_text = f"(Preview only) {truncated_body}" if truncated_body else "(Content not available)"
+    
+    # Build file content (same format as note)
     content_lines = [
         f"Type: post",
         f"Title: {title}",
-        f"Subtitle: {subtitle}" if subtitle else None,
-        f"Date: {item_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}",
-        f"URL: {canonical_url}" if canonical_url else None,
-        f"Slug: {slug}" if slug else None,
-        "",
-        "=" * 60,
-        "",
-        f"(Preview) {truncated_body}" if truncated_body else "(Full content TBD)",
     ]
-    content = "\n".join(line for line in content_lines if line is not None)
+    if subtitle:
+        content_lines.append(f"Subtitle: {subtitle}")
+    content_lines.append(f"Date: {item_dt.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    if canonical_url:
+        content_lines.append(f"URL: {canonical_url}")
+    if slug:
+        content_lines.append(f"Slug: {slug}")
+    
+    content_lines.append("")
+    content_lines.append("=" * 60)
+    content_lines.append("")
+    content_lines.append(body_text)
+    
+    content = "\n".join(content_lines)
     
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(content)
