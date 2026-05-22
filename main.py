@@ -27,7 +27,7 @@ import psycopg2
 from dotenv import load_dotenv
 from financial_hub_postgres import FinancialHubClient
 
-from scraper import get_user_id, get_user_posts, fetch_post_full_content, html_to_text
+from scraper import get_user_id, get_user_posts, fetch_post_full_content, html_to_text, _session
 
 
 # Load environment variables
@@ -85,10 +85,6 @@ def download_attachments(attachments: list, file_path: str, username: str) -> li
     download_dir = os.path.join(file_path, username, "attachments")
     os.makedirs(download_dir, exist_ok=True)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-
     updated = []
     for att in attachments:
         att_copy = dict(att)
@@ -112,7 +108,7 @@ def download_attachments(attachments: list, file_path: str, username: str) -> li
 
                 # Download if not already exists
                 if not os.path.exists(local_file):
-                    resp = requests.get(url, headers=headers, timeout=30)
+                    resp = _session.get(url, timeout=30)
                     resp.raise_for_status()
                     with open(local_file, "wb") as f:
                         f.write(resp.content)

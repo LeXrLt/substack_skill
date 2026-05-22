@@ -1,10 +1,43 @@
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import re
 import json
 import os
 import argparse
+import time
 from datetime import datetime
 from html.parser import HTMLParser
+
+
+DEFAULT_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+}
+
+
+def create_session(max_retries: int = 3, backoff_factor: float = 1.0) -> requests.Session:
+    """
+    Create a requests Session with automatic retry on connection/SSL errors.
+    Fixes SSL: UNEXPECTED_EOF_WHILE_READING on macOS.
+    """
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+
+    retry_strategy = Retry(
+        total=max_retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+    return session
+
+
+# Module-level shared session
+_session = create_session()
 
 def get_user_id(username: str) -> str:
     """
@@ -15,11 +48,8 @@ def get_user_id(username: str) -> str:
         username = username[1:]
         
     url = f"https://substack.com/@{username}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
     
-    response = requests.get(url, headers=headers)
+    response = _session.get(url, timeout=30)
     response.raise_for_status()
     
     # Extract window._preloads JSON data
@@ -48,9 +78,6 @@ def get_user_posts(user_id: str, max_items: int = 50):
         A list of all fetched items across pages.
     """
     base_url = f"https://substack.com/api/v1/reader/feed/profile/{user_id}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
     
     all_items = []
     cursor = None
@@ -62,7 +89,7 @@ def get_user_posts(user_id: str, max_items: int = 50):
             url = f"{base_url}?cursor={cursor}"
         
         print(f"  Fetching page {page}...")
-        response = requests.get(url, headers=headers)
+        response = _session.get(url, timeout=30)
         response.raise_for_status()
         
         data = response.json()
@@ -234,12 +261,8 @@ def fetch_post_full_content(url: str) -> dict:
     Returns a dict with keys: body_html, title, subtitle, post_date, canonical_url, etc.
     Returns empty dict on failure.
     """
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    }
-    
     try:
-        response = requests.get(url, headers=headers, timeout=30)
+        response = _session.get(url, timeout=30)
         response.raise_for_status()
     except Exception as e:
         print(f"    Warning: Failed to fetch {url}: {e}")
