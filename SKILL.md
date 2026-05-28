@@ -1,66 +1,122 @@
 ---
-name: substack-scraper
-description: Download posts and notes from a Substack user's profile. Supports pagination and saves content as text files.
+name: substack-query
+description: Query Substack posts, notes, and author data stored in the local PostgreSQL database. Read-only — no data modification.
 metadata:
   openclaw:
     requires:
       bins: ["python3"]
 ---
 
-# Substack Scraper Skill
+# Substack Database Query Skill
 
-This skill downloads posts and notes from a Substack user's profile page.
+This skill queries Substack content (posts, notes, comments) that has been previously crawled and stored in a PostgreSQL database.
+
+**This skill is strictly read-only. It never inserts, updates, or deletes any data.**
 
 ## When to use
 
 Use this skill when the user wants to:
-- Download/scrape/fetch posts from a Substack user
-- Save Substack content locally as text files
-- Get recent notes or articles from a Substack profile
+- Read or search Substack posts, notes, or comments from the database
+- List Substack authors that have been crawled
+- Find articles by keyword, author, type, or date range
+- View the full text of a specific article or note
+- Get statistics on crawled Substack content
 
-## How to use
+Do **NOT** use this skill when the user wants to crawl/download new content from Substack (that is a different workflow).
 
-Run the following command from the skill directory `{baseDir}`:
+## Commands
+
+All commands use the same base invocation:
 
 ```bash
-{baseDir}/.venv/bin/python {baseDir}/scraper.py <username> -n <count>
+{baseDir}/.venv/bin/python {baseDir}/query_db.py <command> [options]
 ```
 
-### Parameters
+### 1. List authors
 
-- `<username>` (required): The Substack username (e.g. `takashiyasui`, with or without `@`)
-- `-n <count>` (optional): Maximum number of items to fetch (default: 50, use 0 for unlimited)
-- `-o <dir>` (optional): Output directory (default: `output`)
+```bash
+{baseDir}/.venv/bin/python {baseDir}/query_db.py authors
+```
 
-### Examples
+Returns all crawled Substack authors with username, display name, bio, and profile URL.
 
-User says: "下载substack用户yamashida最近的100条帖子"
-→ Extract username=`yamashida`, count=`100`
-→ Run: `{baseDir}/.venv/bin/python {baseDir}/scraper.py yamashida -n 100`
+### 2. Query items
 
-User says: "Fetch the last 20 posts from @takashiyasui on Substack"
-→ Extract username=`takashiyasui`, count=`20`
-→ Run: `{baseDir}/.venv/bin/python {baseDir}/scraper.py takashiyasui -n 20`
+```bash
+{baseDir}/.venv/bin/python {baseDir}/query_db.py items [options]
+```
 
-User says: "下载substack用户a16z的所有帖子"
-→ Extract username=`a16z`, count=`0` (unlimited)
-→ Run: `{baseDir}/.venv/bin/python {baseDir}/scraper.py a16z -n 0`
+Options:
+- `--author USERNAME` — Filter by author username
+- `--type TYPE` — Filter by type: `post`, `note`, `comment_restack`
+- `--search KEYWORD` — Search in title and body text (case-insensitive)
+- `--since YYYY-MM-DD` — Start date (inclusive)
+- `--until YYYY-MM-DD` — End date (inclusive)
+- `--limit N` — Max results (default: 20, max: 500)
+- `--offset N` — Skip first N results (for pagination)
+- `--id ID` — Fetch a single item by its database ID
+- `--full` — Show complete body text instead of preview
 
-## Output
+### 3. View statistics
 
-Files are saved to `{baseDir}/output/<username>/<year>/<month>/<datetime>_<type>_<title>.txt`
+```bash
+{baseDir}/.venv/bin/python {baseDir}/query_db.py stats [--author USERNAME]
+```
 
-Each file contains:
-- Metadata header (type, date, URL, etc.)
-- Full text content (for notes/comments)
-- Preview text (for posts; full post content to be processed separately)
-- Attachment links (images, etc.) if present
+Returns total counts by type, date ranges, and author count.
+
+## Output format
+
+Each item is output in a stable structured format:
+
+```
+标题: <title>
+来源: substack
+类型: <post|note|comment_restack>
+作者: <username>
+发布时间: <datetime>
+原始链接: <url>
+副标题: <subtitle>        (if present)
+关联文章: <related post>  (if present)
+状态: <status>
+图片路径: <paths>         (if present)
+正文预览: <first 200 chars>  (default)
+--- 正文 ---              (with --full flag)
+<full body text>
+```
+
+Items are separated by `============` lines.
+
+## Examples
+
+User says: "查看数据库里有哪些Substack作者"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py authors`
+
+User says: "搜索substack里关于AI的文章"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py items --search AI`
+
+User says: "查看用户 elad 最近10篇帖子"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py items --author elad --type post --limit 10`
+
+User says: "查看ID为42的内容全文"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py items --id 42 --full`
+
+User says: "2025年1月到3月的所有笔记"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py items --type note --since 2025-01-01 --until 2025-03-31`
+
+User says: "Substack数据库里有多少内容"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py stats`
+
+User says: "看看用户 paulgraham 的统计数据"
+→ Run: `{baseDir}/.venv/bin/python {baseDir}/query_db.py stats --author paulgraham`
 
 ## Setup
 
-If the virtual environment does not exist, create it first:
+This skill shares the virtual environment with the Substack crawler. If the virtual environment does not exist:
 
 ```bash
 python3 -m venv {baseDir}/.venv
 {baseDir}/.venv/bin/pip install -r {baseDir}/requirements.txt
 ```
+
+Database connection is configured via `{baseDir}/.env`.
