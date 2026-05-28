@@ -28,12 +28,12 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 
 def get_db_connection():
-    """Create a read-only database connection using .env config."""
+    """Create a read-only database connection using .env config (readonly user)."""
     conn = psycopg2.connect(
         host=os.getenv("POSTGRES_HOST", "127.0.0.1"),
         port=int(os.getenv("POSTGRES_PORT", "5432")),
-        user=os.getenv("POSTGRES_USER", "hub_user"),
-        password=os.getenv("POSTGRES_PASSWORD", "hub_password"),
+        user=os.getenv("POSTGRES_READONLY_USER", "hub_readonly"),
+        password=os.getenv("POSTGRES_READONLY_PASSWORD", "hub_password"),
         dbname=os.getenv("POSTGRES_DB", "financial_hub"),
     )
     conn.set_session(readonly=True, autocommit=True)
