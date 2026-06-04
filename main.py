@@ -343,7 +343,9 @@ def main():
     args = parser.parse_args()
 
     max_items = args.max_items
-    file_path = args.file_path
+    # 优先使用 CLI 参数，其次使用环境变量 CRAWLER_OUTPUT_DIR
+    # （由 financial_hub 在下载根目录后拼接 source_type 注入）
+    file_path = args.file_path or os.getenv("CRAWLER_OUTPUT_DIR")
 
     # Resolve file_path to absolute
     if file_path:
